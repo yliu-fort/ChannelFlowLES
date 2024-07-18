@@ -7,6 +7,7 @@ On this page we embed a free slip mountain into a domain that is filled with an 
 //#include <stdlib.h>
 //#include <stdio.h>
 
+#include "embed.h"
 #include "navier-stokes/centered.h"
 #if dimension == 3
 #include "lambda2.h"
@@ -16,10 +17,6 @@ int kVerbose = 1;
 #define MU (1.5e-5)
 //#include "oystein/adapt_wavelet_leave_interface.h"
 #include "sander/output_htg.h"
-
-// Fast noise library https://github.com/Auburn/FastNoiseLite.git
-//#define FNL_IMPL
-//#include "FastNoiseLite.h"
 
 #define MAX_LEVEL (8)
 #define MIN_LEVEL (5)
@@ -50,7 +47,13 @@ u.t[bottom] = dirichlet (0);
 u.r[bottom] = dirichlet (0);
 #endif
 
-wall_indicator[bottom] = dirichlet (1);
+u.n[embed] = dirichlet (0);
+u.t[embed] = neumann (0);
+#if dimension > 2
+u.r[embed] = neumann (0);
+#endif
+
+wall_indicator[bottom] = dirichlet (min(z + 0.125+1e-8, 0.125+1e-8 - z) > 0.0 ? 1.0 : 0.0);
 
 /**
 Initialise pressure gradient force and viscosity vars.
@@ -82,11 +85,11 @@ int main(){
 
 event properties(i=0){
   //foreach_face(x)
-  //  av.x[] = fm.x[]*DPDX;
+  //  av.x[] = fm.x[]*DPDX*fs.x[];
   foreach_face()
     muc.x[] = fm.x[]*MU;
 
-  boundary((scalar*){muc});
+  boundary((scalar*){av, muc});
 }
 
 /**
@@ -95,16 +98,22 @@ We use particles to check if the flow does not penetrate the embedded boundary.
 event init (t = 0){
 /* The pressure gradient required to drive the flow is introduced as a
    source term */
-   if (!restore ("restart")) {
+  if (!restore ("restart")) {
   do{
+    scalar phi[];
+    foreach_vertex(){
+      phi[] = min(z + 0.125+1e-8, 0.125+1e-8 - z);
+    }
+    fractions(phi, cs, fs);
+
     foreach(){
       //u.x[] = 1.842*UBAR*y*(2.0-y);
-      u.x[] = UBAR;
+      u.x[] = UBAR*(cs[] > 0.0 ? 1.0 : 0.0);
       u.y[] = 0.0;
       u.z[] = 0.0;
       p[] = 0.;
 
-      wall_indicator[] = 0.0;
+      wall_indicator[] = sqrt(max(0.0, 1.0 - y/(0.125/4.0*CHANNEL_HEIGHT))) * cs[];
     }
 
     boundary(all);
@@ -112,9 +121,9 @@ event init (t = 0){
 #if TREE
     while (
     #if dimension == 2
-    adapt_wavelet((scalar *){u,wall_indicator},(double[]){2e-3,2e-3, 0.001},MAX_LEVEL,MIN_LEVEL).nf
+    adapt_wavelet((scalar *){u,wall_indicator},(double[]){2e-3,2e-3, 1e-8},MAX_LEVEL,MIN_LEVEL).nf
     #elif dimension == 3
-    adapt_wavelet((scalar *){u,wall_indicator},(double[]){5e-3,5e-3,5e-3, 0.001},MAX_LEVEL,MIN_LEVEL).nf
+    adapt_wavelet((scalar *){u,wall_indicator},(double[]){5e3,5e-3,5e-3, 1e-8},MAX_LEVEL,MIN_LEVEL).nf
     #endif
 );
 #else
@@ -123,7 +132,7 @@ event init (t = 0){
    }
 }
 
-#if TREE
+#if 0
 event adapt (i++) {
   #if dimension == 2
     adapt_wavelet((scalar *){u,wall_indicator},(double[]){2e-3,2e-3, 0.001},MAX_LEVEL,MIN_LEVEL);
@@ -172,26 +181,18 @@ double unoise(double p1, double p2) {
 
 
 event wall_correction(i++){
-  //fnl_state pnoise = fnlCreateState();
-  //pnoise.noise_type = FNL_NOISE_PERLIN;
-  //pnoise.fractal_type = FNL_FRACTAL_FBM;
-  //pnoise.frequency = 30.0f;
-  //pnoise.octaves = 5;
-
   foreach_boundary (bottom){
     double wall_dist = Delta/2.0; // bottom boundary is wall
     #if dimension == 2
-      //double roughness_corr = fnlGetNoise2D(&pnoise, x, 0.0);
       double roughness_corr = unoise(x, 0.0);
     #elif dimension == 3
-      //double roughness_corr = fnlGetNoise2D(&pnoise, x, z);
-      double roughness_corr = unoise(x, z) - 0.5;
+      double roughness_corr = unoise(x, z);
     #endif
     #if dimension == 2
-      double actual_roughness = (1.0 + roughness_corr * 0.2 )*Z0;
+      double actual_roughness = (1.0 + roughness_corr * (roughness_corr > 0.0 ? 1.0 : 0.8))*Z0;
       double u_bar = fabs(u.x[] - u.x[0,1]);
     #elif dimension == 3
-      double actual_roughness = (1.0 + roughness_corr * 0.2 )*Z0;
+      double actual_roughness = (1.0 + roughness_corr * (roughness_corr > 0.0 ? 1.0 : 0.8))*Z0;
       double u_bar = sqrt(sq(u.x[] - u.x[0,1]) + sq(u.z[] - u.z[0,1]));
     #endif
     double tau_w = -sq(KAPPA/log(wall_dist/actual_roughness))*sq(u_bar);
@@ -277,7 +278,7 @@ event write2htg (t += 0.05;t<=100.0) {
   
   char fname[50];
   sprintf(fname, "result.%06d", i);
-  scalar* output_scalars = {p, vortex_core};
+  scalar* output_scalars = {p, vortex_core, cs};
   //rsm_model_output(&output_scalars);
   output_htg(output_scalars,(vector *){u}, ".", fname, i, t);
 

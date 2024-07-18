@@ -8,7 +8,7 @@ UNINST = $(shell ls $(ROOT_DIR)/bin/* | xargs -n 1 find -L /usr/local/bin -samef
 all:
 	make clean
 	mkdir -p bin
-	make 2d mpi2d 3d mpi3d
+	make mpi3d
 
 2d: main.c
 	rm -f _main.c
@@ -18,7 +18,7 @@ all:
 3d: main.c
 	rm -f _main.c
 	make clean
-	$(QCC) $(CFLAGS) -events -D_MPI=0 -grid=octree -o bin/$@ $^ -lm
+	$(QCC) $(CFLAGS) -D_MPI=0 -grid=octree -o bin/$@ $^ -lm
 
 mpi2d: main.c
 	rm -f _main.c
