@@ -137,7 +137,7 @@ event adapt (i++) {
 double wall_function(double y_plus) {
     if (y_plus < 5.0) {
         return y_plus;
-    }else if (5.0 <= y_plus <= 30.0){
+    }else if (y_plus >= 5.0 && y_plus <= 30.0){
         double gamma = (y_plus - 5.0) / 25.0;
         return pow((1.0 - gamma) * pow(5.0, 4.0) + gamma * pow((1.0 / KAPPA) * log(30.0) + B, 4.0), 0.25);
     }else if (y_plus > 30.0) {
