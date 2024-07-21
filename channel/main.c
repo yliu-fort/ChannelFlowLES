@@ -12,7 +12,6 @@ On this page we embed a free slip mountain into a domain that is filled with an 
 #include "lambda2.h"
 #endif
 
-int kVerbose = 1;
 #define MU (1.5e-5)
 //#include "oystein/adapt_wavelet_leave_interface.h"
 #include "sander/output_htg.h"
@@ -31,11 +30,13 @@ int kVerbose = 1;
 #define RE_TAU (180.0)
 #define UBAR (1.0)
 #define DPDX (1.0)
+#define T0 (8.0)
 
 #define Z0 (0.0001)
 
 #define KAPPA (0.41)  // von Kármán constant
 #define B (5.2)       // Log-law intercept (commonly used value for smooth walls)
+#define M_PI (3.1415926)
 
 /**
 We set a free-slip boundary for the x and y components.
@@ -43,9 +44,13 @@ We set a free-slip boundary for the x and y components.
 scalar wall_indicator[];
 
 u.n[top] = dirichlet (0);
+u.t[top] = dirichlet (0);
+#if dimension > 2
+u.r[top] = dirichlet (0);
+#endif
 
 u.n[bottom] = dirichlet (0);
-u.t[bottom] = dirichlet (0);
+u.t[bottom] = dirichlet (UBAR*sin(2.0*M_PI*t/T0));
 #if dimension > 2
 u.r[bottom] = dirichlet (0);
 #endif
@@ -56,14 +61,11 @@ wall_indicator[bottom] = dirichlet (1);
 Initialise pressure gradient force and viscosity vars.
 */
 face vector muc[];
-face vector av[];
 
 int main(){
   L0 = CHANNEL_HEIGHT;
   N = 1<<MIN_LEVEL;
-  //kTurbConstants.k_0 = 0.001;
-  //kTurbConstants.omega_0 = 420.0;
-  a = av;
+
   mu = muc;
 
   CFL = 0.2;
@@ -81,8 +83,6 @@ int main(){
 }
 
 event properties(i=0){
-  //foreach_face(x)
-  //  av.x[] = fm.x[]*DPDX;
   foreach_face()
     muc.x[] = fm.x[]*MU;
 
@@ -98,10 +98,9 @@ event init (t = 0){
    if (!restore ("restart")) {
   do{
     foreach(){
-      //u.x[] = 1.842*UBAR*y*(2.0-y);
-      u.x[] = UBAR;
-      u.y[] = 0.0;
-      u.z[] = 0.0;
+      foreach_dimension(){
+        u.x[] = 0.0;
+      }
       p[] = 0.;
 
       wall_indicator[] = 0.0;
@@ -112,9 +111,9 @@ event init (t = 0){
 #if TREE
     while (
     #if dimension == 2
-    adapt_wavelet((scalar *){u,wall_indicator},(double[]){2e-3,2e-3, 0.001},MAX_LEVEL,MIN_LEVEL).nf
+    adapt_wavelet((scalar *){u,wall_indicator},(double[]){1e-2,1e-2, 0.001},MAX_LEVEL,MIN_LEVEL).nf
     #elif dimension == 3
-    adapt_wavelet((scalar *){u,wall_indicator},(double[]){5e-3,5e-3,5e-3, 0.001},MAX_LEVEL,MIN_LEVEL).nf
+    adapt_wavelet((scalar *){u,wall_indicator},(double[]){1e-2,1e-2,1e-2, 0.001},MAX_LEVEL,MIN_LEVEL).nf
     #endif
 );
 #else
@@ -126,9 +125,9 @@ event init (t = 0){
 #if TREE
 event adapt (i++) {
   #if dimension == 2
-    adapt_wavelet((scalar *){u,wall_indicator},(double[]){2e-3,2e-3, 0.001},MAX_LEVEL,MIN_LEVEL);
+    adapt_wavelet((scalar *){u,wall_indicator},(double[]){1e-2,1e-2, 0.001},MAX_LEVEL,MIN_LEVEL);
   #elif dimension == 3
-    adapt_wavelet((scalar *){u,wall_indicator},(double[]){5e-3,5e-3,5e-3, 0.001},MAX_LEVEL,MIN_LEVEL);
+    adapt_wavelet((scalar *){u,wall_indicator},(double[]){1e-2,1e-2,1e-2, 0.001},MAX_LEVEL,MIN_LEVEL);
   #endif
 }
 #endif
@@ -198,11 +197,11 @@ event wall_correction(i++){
     double u_tau = sqrt(fabs(tau_w)/DENSITY);
     double y_plus = u_tau*wall_dist/(MU/DENSITY);
 
-    if (u_bar != 0) {  // Ensuring we don't divide by zero
+    if (u_bar != 0 && y_plus < 500.0) {  // Ensuring we don't divide by zero
         double correction_factor = min(1.0, wall_function(y_plus) * u_tau / u_bar);
-        u.x[] *= correction_factor;
+        u.x[] = u.x[] * correction_factor + (1.0 - correction_factor) * u.x[0,1];
         #if dimension == 3
-        u.z[] *= correction_factor;  // Assuming adjustment needed in both x and z directions
+        u.z[] = u.z[] * correction_factor + (1.0 - correction_factor) * u.z[0,1];
         #endif
     }
   }
@@ -211,9 +210,9 @@ event wall_correction(i++){
 /**
 To help the accurate evaluation of the viscous term, we enforce the time step according to a limit cell-Peclet number. 
 */
-event stability (i++) {
-    CFL = 0.2;
-}
+//event stability (i++) {
+//    CFL = 0.2;
+//}
 /**
 We generate a movie displaying the flow via $u_x$ and the tracers, these do not penetrate the boundary. 
 
@@ -248,15 +247,7 @@ event logfile_ke (i++) {
 	   t, vd, ke, 2./3.*ke/MU*sqrt(15.*MU/vd));
 }
 
-event logfile_mgp (i+=20) {
-  if (i == 0)
-    fprintf (stderr,
-	     "i dt mgp.i mgp.resb mgp.resa mgp.sum mgp.nrelax TOL TOL/sq(dt)\n");
-  fprintf (stderr, "%d %g %d %d %g %g %g %g %d %d %g %g \n",
-	   i,dt, mgp.i,mgu.i,mgp.resb,mgu.resb,mgp.resa,mgu.resa,mgp.nrelax,mgu.nrelax,TOLERANCE,TOLERANCE/(dt*dt));
-}
-
-event snapshot(t += 0.05;t<=100.0) {
+event snapshot(t += 0.05;t<=25*T0) {
 #if _MPI  
   MPI_Barrier(MPI_COMM_WORLD);  
 #endif
@@ -267,19 +258,28 @@ event snapshot(t += 0.05;t<=100.0) {
   fprintf (stderr, "%d : Dump restart file.\n", i);
 }
 
-event write2htg (t += 0.05;t<=100.0) {
+event write2htg (t += 0.05) {
   scalar vortex_core[];
+
   #if dimension == 2
     vorticity(u, vortex_core);
   #elif dimension == 3
     lambda2(u, vortex_core);
   #endif
-  
+
+  vector U[];
+  foreach(){
+      U.x[] = u.x[];
+      U.y[] = u.y[];
+      #if dimension == 3
+      U.z[] = u.z[];
+      #endif
+  }
+  boundary({U});
+
   char fname[50];
   sprintf(fname, "result.%06d", i);
-  scalar* output_scalars = {p, vortex_core};
-  //rsm_model_output(&output_scalars);
-  output_htg(output_scalars,(vector *){u}, ".", fname, i, t);
+  output_htg({vortex_core, p}, (vector *){U}, ".", fname, i, t);
 
   fprintf (stderr, "write output to %s\n", fname);
 }
